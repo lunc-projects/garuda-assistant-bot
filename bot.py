@@ -1909,6 +1909,28 @@ async def on_error(update, ctx: ContextTypes.DEFAULT_TYPE):
     try: await _alert_owner(ctx.bot, where, err)
     except Exception: pass
 
+async def _apply_profile_photo():
+    """Re-apply the bot's profile photo (owner's neon-eagle logo) on boot so
+    redeploys never lose it. PTB 21.6 predates the setMyProfilePhoto input
+    classes, so post the multipart form to the Bot API directly with httpx.
+    Never raises — a photo failure must not block startup."""
+    try:
+        _pf = pathlib.Path(__file__).with_name("bot-profile-512.png")
+        if not _pf.exists():
+            return
+        _url = f"https://api.telegram.org/bot{TOKEN}/setMyProfilePhoto"
+        _data = {"photo": json.dumps({"type": "static", "photo": "attach://photo"})}
+        _files = {"photo": ("bot-profile-512.png", _pf.read_bytes(), "image/png")}
+        async with httpx.AsyncClient(timeout=30) as _cli:
+            _resp = await _cli.post(_url, data=_data, files=_files)
+        _body = _resp.json()
+        if _body.get("ok"):
+            print("profile photo: applied")
+        else:
+            print(f"profile photo: {_body.get('description', 'unknown error')}")
+    except Exception as e:
+        print(f"profile photo: {e}")
+
 async def post_init(app: Application):
     try:
         await app.bot.set_my_description("Garuda Assistant Bot — I summarize busy group chats into a quick TL;DR and answer Garuda DeFi questions with live on-chain data (/dex, /staking, /farms). Use /summary, /catchup, /ask in a group, or DM me a long text to summarize.")
@@ -1917,14 +1939,7 @@ async def post_init(app: Application):
             ("summary","Summarize group messages"),("catchup","What you missed"),("tldr","Shrink a message (reply to it)"),
             ("ask","Ask me anything"),("dex","Garuda DEX overview (live)"),("staking","Garuda staking status (live)"),("farms","Garuda farms overview (live)"),("proposals","Proposals voting now"),("proposal","Proposal + tally"),("price","LUNC + USTC price"),("stats","Chain stats"),("govalerts","Proposal alerts on/off"),("wallet","Public wallet lookup"),("token","CW20 token info"),("rank","Your rank in this chat"),("language","Choose your language"),("privacy","Privacy & security info"),("protect","Request scam protection (group admins)"),("aiban","AI-ban a user (moderators)"),("appeal","Appeal a ban (in DM)"),("rules","This group's rules"),("menu","Buttons menu — no typing"),("panel","Admin panel (group admins)"),("help","All commands")])
         # Profile photo (owner's logo) — re-applied on boot so redeploys never lose it
-        try:
-            from telegram import InputProfilePhotoStatic
-            _pf = pathlib.Path(__file__).with_name("bot-profile-512.png")
-            if _pf.exists():
-                with open(_pf, "rb") as fh:
-                    await app.bot.set_my_profile_photo(photo=InputProfilePhotoStatic(photo=fh.read()))
-        except Exception as e:
-            print(f"profile photo: {e}")
+        await _apply_profile_photo()
         print("Garuda Assistant Bot: description + commands set")
         if AI_ENABLED and not getattr(ai_client, "AI_API_KEY", ""):
             await _alert_owner(app.bot, "startup check", RuntimeError("AI is ON but AI_API_KEY is not set in Railway — AI features will answer 'not configured' until the key is added."))
