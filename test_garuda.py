@@ -177,6 +177,41 @@ check("HELP has no dropped commands",
       all(c not in bot.HELP for c in ("/validators", "/burn", "/freegames", "/calc")))
 check("ASK_SYSTEM carries the KB", "knowledge base" in bot.ASK_SYSTEM and "Garuda" in bot.ASK_SYSTEM)
 
+# --- Owner issue alerts: transient blips need 3 strikes in an hour,
+# real errors still page immediately (2026-10-26) ---
+class _NetErr(Exception): pass
+_NetErr.__module__ = "telegram.error"
+_NetErr.__name__ = "NetworkError"
+
+class _FakeBot:
+    def __init__(self): self.sent = []
+    async def send_message(self, chat_id, text): self.sent.append(text)
+
+async def _alert_flow():
+    fb = _FakeBot()
+    bot.OWNER_ID = 424242
+    bot.ALERTS = bot.alerts_mod.AlertThrottler()
+    bot.TRANSIENT = bot.alerts_mod.TransientGate()
+    err = _NetErr("httpx.ReadError: ")
+    await bot._alert_owner(fb, "a background job or handler", err)
+    await bot._alert_owner(fb, "a background job or handler", err)
+    after_two = len(fb.sent)
+    await bot._alert_owner(fb, "a background job or handler", err)
+    after_three = len(fb.sent)
+    third_text = fb.sent[-1] if fb.sent else ""
+    await bot._alert_owner(fb, "a background job or handler", ValueError("real bug"))
+    after_real = len(fb.sent)
+    await bot._alert_owner(fb, "a background job or handler", err)
+    after_reset_one = len(fb.sent)
+    return after_two, after_three, third_text, after_real, after_reset_one
+
+_a2, _a3, _t3, _ar, _ar1 = asyncio.run(_alert_flow())
+check("alerts: two transient blips send nothing", _a2 == 0)
+check("alerts: 3rd transient blip sends one alert", _a3 == 1)
+check("alerts: 3rd-blip alert says it is the 3rd occurrence", "3rd occurrence in an hour" in _t3)
+check("alerts: non-network error pages immediately", _ar == 2)
+check("alerts: counter reset — one new blip after the alert sends nothing", _ar1 == 2)
+
 print()
 print("FAILURES:", fails if fails else "none")
 sys.exit(1 if fails else 0)

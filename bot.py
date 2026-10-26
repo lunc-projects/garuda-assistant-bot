@@ -1868,14 +1868,29 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # outage), the bot can't report its own death — that's an outside
 # watchdog's job, like the Garuda bot has.
 ALERTS = alerts_mod.AlertThrottler()
+# Transient network blips (a dropped connection, a timeout) don't page
+# the owner one by one — the bot rides those out on its own. They're
+# logged on every occurrence, and only the 3rd occurrence of the same
+# problem within an hour sends an alert (2026-10-26).
+TRANSIENT = alerts_mod.TransientGate()
+TRANSIENT_ALERT_AT = 3
 
 async def _alert_owner(bot, where, err):
     if not OWNER_ID: return
     key = f"{where}:{type(err).__name__}"
-    if not ALERTS.allow(key, int(time.time())): return
+    now = int(time.time())
+    note = ""
+    if alerts_mod.is_transient_network_error(err):
+        count = TRANSIENT.note(key, now)
+        if count < TRANSIENT_ALERT_AT:
+            print(f"transient network error #{count} in the last hour (logged, not alerting): {where}: {type(err).__name__}: {err}")
+            return
+        TRANSIENT.reset(key)
+        note = "\nThis is the 3rd occurrence in an hour — the earlier ones were logged, not alerted."
+    if not ALERTS.allow(key, now): return
     when = datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M UTC")
     try:
-        await bot.send_message(OWNER_ID, f"⚠️ Bot issue — {where}\n{type(err).__name__}: {str(err)[:300]}\nTime: {when}\nThe bot is still running — this is an alert, not a crash report. The same problem won't re-alert for an hour.")
+        await bot.send_message(OWNER_ID, f"⚠️ Bot issue — {where}\n{type(err).__name__}: {str(err)[:300]}\nTime: {when}{note}\nThe bot is still running — this is an alert, not a crash report. The same problem won't re-alert for an hour.")
     except Exception: pass
 
 async def on_error(update, ctx: ContextTypes.DEFAULT_TYPE):
