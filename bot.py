@@ -2,7 +2,7 @@
 """Garuda Assistant Bot — AI assistant for Garuda DeFi groups.
 Core: summarize hundreds of messages into a quick summary.
 Also: /catchup, /tldr, /ask (Garuda knowledge base + general AI Q&A),
-live Garuda data (/dex, /staking, /farms, /status), DM summary.
+live Garuda data (/dex, /staking, /farms), DM summary.
 Standalone — Garuda only, no other projects included.
 Run: TELEGRAM_BOT_TOKEN=... AI_API_KEY=... python bot.py
 """
@@ -41,7 +41,6 @@ Or just @mention me in the group, or DM me
 /dex — Garuda DEX overview (live)
 /staking — Garuda staking: regular pools + cross-staking status (live)
 /farms — Garuda farms overview (live)
-/status — security status: live check of Garuda's core contracts against the post-repair baseline
 
 *Chain data (Garuda runs on Terra Classic)*
 /price — LUNC + USTC price, market cap, volume
@@ -87,7 +86,7 @@ Edits and photo/video captions are checked the same way — post clean and swap 
 (Protection controls: protected-group admins, owner-appointed elevated users, and the owner.)
 
 *Hashtags & group texts*
-Type a hashtag in chat — #staking, #security, #safety, #memo… — and I'll answer it. #commands lists them all.
+Type a hashtag in chat — #staking, #safety, #memo… — and I'll answer it. #commands lists them all.
 /setrules <text> — group admins set this group's rules (/rules or #rules shows them)
 /setwelcome <text> — group admins set the note new joiners see (/welcome shows it)
 /report — reply to a scam/spam message: alerts this group's admins by DM with a link to it
@@ -258,17 +257,17 @@ ASK_SYSTEM = ("You are Garuda Assistant Bot, the assistant for Garuda DeFi — a
               "use the knowledge base below and prefer it over general knowledge; if something is not "
               "covered, say so instead of inventing details. Never invent contract addresses, links, "
               "prices, or rates — for live numbers point to the live commands (/dex, /staking, /farms, "
-              "/status, /price, /proposals) and to Finder (finder.terraclassic.community) for on-chain "
+              "/price, /proposals) and to Finder (finder.terraclassic.community) for on-chain "
               "verification.\n\n" + kb_as_text())
 
 AI_BANNED_NOTE = (
     "🚫 AI is off for your account — a moderator put an AI ban on it. "
-    "Simple commands still work: /price, /proposals, /links, /dex, /staking, /farms, /status, /safety. "
+    "Simple commands still work: /price, /proposals, /links, /dex, /staking, /farms, /safety. "
     "If you think this is a mistake, ask a group admin or the bot owner.")
 
 GROUP_AI_OFF_NOTE = (
     "🔒 AI is turned off in this group by its admins. Simple commands still work: "
-    "/price, /proposals, /links, /dex, /staking, /farms, /status, /safety. "
+    "/price, /proposals, /links, /dex, /staking, /farms, /safety. "
     "An admin can turn AI back on with /aion.")
 
 async def ai_guard(update):
@@ -278,7 +277,7 @@ async def ai_guard(update):
     if not AI_ENABLED:
         await update.message.reply_text(
             "🤖 AI features are temporarily disabled while we review security. "
-            "Simple commands still work: /price, /proposals, /links, /dex, /staking, /farms, /status, /safety. /summary and /catchup also work as basic non-AI summaries while AI is off.")
+            "Simple commands still work: /price, /proposals, /links, /dex, /staking, /farms, /safety. /summary and /catchup also work as basic non-AI summaries while AI is off.")
         return False
     if update.effective_chat.type != "private" and not store.ai_enabled(update.effective_chat.id):
         await update.message.reply_text(GROUP_AI_OFF_NOTE)
@@ -466,10 +465,6 @@ async def on_staking(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def on_farms(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try: await update.message.reply_text(await garuda.farms_text(), parse_mode=ParseMode.MARKDOWN)
     except Exception: await update.message.reply_text("Couldn't fetch Garuda farms right now.")
-
-async def on_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    try: await update.message.reply_text(await garuda.status_text(), parse_mode=ParseMode.MARKDOWN)
-    except Exception: await update.message.reply_text("Couldn't run the live security check right now.")
 
 async def on_safety(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(SAFETY_TEXT, parse_mode=ParseMode.MARKDOWN)
@@ -1901,11 +1896,11 @@ async def on_error(update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(app: Application):
     try:
-        await app.bot.set_my_description("Garuda Assistant Bot — I summarize busy group chats into a quick TL;DR and answer Garuda DeFi questions with live on-chain data (/dex, /staking, /farms, /status). Use /summary, /catchup, /ask in a group, or DM me a long text to summarize.")
-        await app.bot.set_my_short_description("Group summaries + Garuda DeFi assistant: live DEX, staking, farms and security status.")
+        await app.bot.set_my_description("Garuda Assistant Bot — I summarize busy group chats into a quick TL;DR and answer Garuda DeFi questions with live on-chain data (/dex, /staking, /farms). Use /summary, /catchup, /ask in a group, or DM me a long text to summarize.")
+        await app.bot.set_my_short_description("Group summaries + Garuda DeFi assistant: live DEX, staking and farms data.")
         await app.bot.set_my_commands([
             ("summary","Summarize group messages"),("catchup","What you missed"),("tldr","Shrink a message (reply to it)"),
-            ("ask","Ask me anything"),("dex","Garuda DEX overview (live)"),("staking","Garuda staking status (live)"),("farms","Garuda farms overview (live)"),("status","Garuda security status (live check)"),("proposals","Proposals voting now"),("proposal","Proposal + tally"),("price","LUNC + USTC price"),("stats","Chain stats"),("govalerts","Proposal alerts on/off"),("wallet","Public wallet lookup"),("token","CW20 token info"),("rank","Your rank in this chat"),("language","Choose your language"),("privacy","Privacy & security info"),("protect","Request scam protection (group admins)"),("aiban","AI-ban a user (moderators)"),("appeal","Appeal a ban (in DM)"),("rules","This group's rules"),("menu","Buttons menu — no typing"),("panel","Admin panel (group admins)"),("help","All commands")])
+            ("ask","Ask me anything"),("dex","Garuda DEX overview (live)"),("staking","Garuda staking status (live)"),("farms","Garuda farms overview (live)"),("proposals","Proposals voting now"),("proposal","Proposal + tally"),("price","LUNC + USTC price"),("stats","Chain stats"),("govalerts","Proposal alerts on/off"),("wallet","Public wallet lookup"),("token","CW20 token info"),("rank","Your rank in this chat"),("language","Choose your language"),("privacy","Privacy & security info"),("protect","Request scam protection (group admins)"),("aiban","AI-ban a user (moderators)"),("appeal","Appeal a ban (in DM)"),("rules","This group's rules"),("menu","Buttons menu — no typing"),("panel","Admin panel (group admins)"),("help","All commands")])
         # Profile photo (owner's logo) — re-applied on boot so redeploys never lose it
         try:
             from telegram import InputProfilePhotoStatic
@@ -1951,7 +1946,6 @@ def main():
     app.add_handler(CommandHandler("dex", on_dex))
     app.add_handler(CommandHandler("staking", on_staking))
     app.add_handler(CommandHandler("farms", on_farms))
-    app.add_handler(CommandHandler("status", on_status))
     app.add_handler(CommandHandler("safety", on_safety))
     app.add_handler(CommandHandler("learn", on_learn))
     app.add_handler(CommandHandler("govalerts", on_govalerts))

@@ -122,7 +122,7 @@ def format_staking(regular_tokens, regular_info, cross_count, cross_info, cross_
     scid = (cross_cfg or {}).get("staking_code_id")
     lines.append(f"\n*Cross-staking* — {cross_count} staking contracts registered")
     lines.append(f"Factory code: {cross_info.get('code_id')}" + (f" · staking code: {scid}" if scid else ""))
-    lines.append("Cross-staking was repaired on 2026-10-24 after the October incident — factory code 11750, staking code 11751. See /status for a live check.")
+    lines.append("Cross-staking was repaired on 2026-10-24 after the October incident — factory code 11750, staking code 11751.")
     lines.append(f"\nRegular factory: {finder(REGULAR_STAKING_FACTORY)}")
     lines.append(f"Cross factory: {finder(CROSS_STAKING_FACTORY)}")
     lines.append("⚠️ Staking always carries smart-contract risk — this is live on-chain info, not financial advice.")

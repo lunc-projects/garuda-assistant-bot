@@ -19,7 +19,9 @@ check("case-insensitive", topics.lookup("MEMO") == topics.lookup("memo"))
 check("alias #scamwarning -> safety", topics.lookup("scamwarning") == topics.lookup("safety"))
 check("alias #transporterror -> commonissues", topics.lookup("transporterror") == topics.lookup("commonissues"))
 check("alias #swap -> dex (and it is the Garuda answer)", topics.lookup("swap") == topics.lookup("dex") and "Garuda" in topics.lookup("dex"))
-check("alias #hack -> security", topics.lookup("hack") == topics.lookup("security"))
+check("dropped #security topic -> None", topics.lookup("security") is None)
+check("dropped security aliases -> None",
+      all(topics.lookup(tag) is None for tag in ("hack", "hacked", "incident", "status")))
 check("#staking is Garuda staking", topics.lookup("staking") is not None and "/staking" in topics.lookup("staking"))
 check("dropped LUNC tags stay dropped", topics.lookup("buyluna") is None and topics.lookup("tokenomics") is None and topics.lookup("validators") is None)
 check("unknown tag -> None", topics.lookup("nosuchtag") is None)
@@ -36,7 +38,8 @@ check("all topic texts are complete and sized sanely", not bad)
 
 # --- Commands list ---
 ct = topics.commands_text()
-check("#commands lists the tags", "#memo" in ct and "#staking" in ct and "#security" in ct and "#rules" in ct)
+check("#commands lists the tags", "#memo" in ct and "#staking" in ct and "#rules" in ct)
+check("#commands omits the dropped security topic", "#security" not in ct)
 
 # --- Group rules / welcome settings roundtrip ---
 check("rules unset by default", store.get_setting(-1001, "rules_text") is None)

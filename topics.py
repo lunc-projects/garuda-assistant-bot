@@ -2,7 +2,7 @@
 
 In a group, typing a hashtag like #staking makes the bot reply with a
 short, ready answer. Content is static and factual — live numbers
-always point at the live commands (/dex, /staking, /farms, /status).
+always point at the live commands (/dex, /staking, /farms).
 Only tags with verified content are included; #rules, #welcome and
 #commands are dynamic and handled in bot.py.
 """
@@ -31,7 +31,7 @@ TOPICS = {
     "garuda": (
         "🦅 What is Garuda DeFi\n"
         "A DeFi platform built natively on Terra Classic: a DEX for swaps and liquidity, regular + cross staking pools, "
-        "NFT staking, and yield farms — governed by GDEX holders. Live overviews: /dex · /staking · /farms · /status"),
+        "NFT staking, and yield farms — governed by GDEX holders. Live overviews: /dex · /staking · /farms"),
     "dex": (
         "🔄 Garuda DEX\n"
         "Garuda's own decentralised exchange on Terra Classic: swap CW20 tokens through liquidity pairs, or provide "
@@ -46,12 +46,6 @@ TOPICS = {
         "🌾 Garuda farms\n"
         "Farms pay rewards for staking LP tokens from Garuda DEX pairs; the Garuda app tracks 389 farms. "
         "Farming adds impermanent-loss risk (#il) on top of price risk. Overview: /farms"),
-    "security": (
-        "🛡️ Garuda security status\n"
-        "Run /status — it re-reads Garuda's core contracts (code ids + admins) live from the chain and compares them "
-        "with the post-repair baseline from the October 2026 incident. In short: NFT staking was exploited Oct 20 and "
-        "cross-staking drained Oct 21; regular staking and the DEX were not drained, and the cross-staking factory "
-        "was repaired Oct 24. Ask me 'what happened in October' for the full verified summary."),
     "il": (
         "⚖️ Impermanent loss (IL)\n"
         "When you provide liquidity to a pool, price moves can leave you with less value than if you'd simply held both "
@@ -92,7 +86,6 @@ ALIASES = {
     "dexes": "dex", "swap": "dex", "trading": "dex", "exchanges": "dex", "garudadex": "dex",
     "stake": "staking", "crossstaking": "staking",
     "farming": "farms", "yieldfarming": "farms",
-    "hack": "security", "hacked": "security", "incident": "security", "status": "security",
     "impermanentloss": "il",
     "whatisgaruda": "garuda",
 }
@@ -114,4 +107,4 @@ def known(tag):
 
 def commands_text():
     tags = sorted(set(TOPICS) | set(ALIASES) | {"rules", "welcome", "commands"})
-    return "🏷 Hashtags I answer in chat:\n" + " ".join("#" + t for t in tags) + "\nJust type one in the group — e.g. #staking or #security."
+    return "🏷 Hashtags I answer in chat:\n" + " ".join("#" + t for t in tags) + "\nJust type one in the group — e.g. #staking or #safety."

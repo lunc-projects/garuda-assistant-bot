@@ -3,7 +3,7 @@
 Facts only — written from the verified record (the Garuda security
 watch's on-chain baselines and the October 2026 incident investigation).
 No invented links, rates, or numbers: anything live points at the live
-commands (/dex, /staking, /farms, /status), and anything not verified
+commands (/dex, /staking, /farms), and anything not verified
 here is simply not claimed. Owner: keep this file current when the
 team publishes new official info.
 """
@@ -16,7 +16,7 @@ KB = {
         "Its pieces: a DEX (swap CW20 tokens and provide liquidity), regular CW20 staking pools, "
         "cross-staking, NFT staking, and yield farms for DEX liquidity pairs — all governed by "
         "GDEX token holders through the Garuda governance contract. "
-        "Live on-chain overviews: /dex · /staking · /farms · /status"),
+        "Live on-chain overviews: /dex · /staking · /farms"),
     "dex": (
         "The Garuda DEX is an automated-market-maker exchange on Terra Classic. You swap one CW20 "
         "token for another through liquidity pairs, or add both sides of a pair as liquidity and "
@@ -33,7 +33,7 @@ KB = {
         "the regular staking factory — stake one token, earn rewards; it was NOT affected by the "
         "October 2026 incident. Cross-staking: pools that pair tokens across contracts; it was "
         "drained in October 2026 and repaired by the team on 2026-10-24 (factory code 11750, "
-        "staking code 11751). Live pool counts and codes: /staking · live security check: /status"),
+        "staking code 11751). Live pool counts and codes: /staking · pools and farms: /farms"),
     "farms": (
         "Garuda farms pay rewards for staking LP (liquidity-provider) tokens from Garuda DEX "
         "pairs. The Garuda app tracks 389 farms. Farming adds impermanent-loss risk on top of "
@@ -54,13 +54,12 @@ KB = {
         "The regular staking pools and the DEX itself were NOT drained. "
         "The Garuda team repaired the cross-staking factory on Oct 24 (codes 11750 / 11751). "
         "The Garuda team did not hack itself — the drain was an external attack, and no culprit "
-        "has been publicly identified. Run /status for a live check that the core contracts "
-        "still match the post-repair baseline."),
+        "has been publicly identified."),
     "is garuda safe": (
         "No DeFi platform is risk-free, and Garuda was exploited in October 2026 (ask me what "
         "happened in October for the verified summary). What you can verify yourself, any "
-        "time: /status re-reads the core contracts' code ids and admins live from the chain "
-        "and compares them with the post-repair baseline. Use your own judgment, start small, "
+        "time: the contract addresses in /dex, /staking and /farms all link to Finder, where "
+        "you can check code ids and admins yourself. Use your own judgment, start small, "
         "and never deposit more than you can afford to lose."),
     "links": (
         "Verified here: the Garuda community group on Telegram is @Garudaverse99, and every "

@@ -161,12 +161,18 @@ for banned in ("freegames", "send_game", "InlineQueryResultGame", "WebAppInfo",
                "LUNC Assistant", "luncscan", "LUNCDash", "on_games", "on_validators",
                "burnalerts", "watchvalidator", "InlineQueryHandler"):
     check(f"bot.py has no '{banned}'", banned not in bot_src)
-for needed in ("Garuda Assistant Bot", "on_staking", "on_farms", "on_status", "garuda.staking_text"):
+for needed in ("Garuda Assistant Bot", "on_staking", "on_farms", "garuda.staking_text"):
     check(f"bot.py has '{needed}'", needed in bot_src)
+check("bot.py has no /status handler wiring",
+      "on_status" not in bot_src and 'CommandHandler("status"' not in bot_src)
+check("bot.py uses the no-security descriptions",
+      "live DEX, staking and farms data." in bot_src
+      and '("status","Garuda security status (live check)")' not in bot_src)
 
 import bot
 check("HELP lists the Garuda data commands",
-      all(c in bot.HELP for c in ("/dex", "/staking", "/farms", "/status")))
+      all(c in bot.HELP for c in ("/dex", "/staking", "/farms")))
+check("HELP has no /status command", "/status" not in bot.HELP)
 check("HELP has no dropped commands",
       all(c not in bot.HELP for c in ("/validators", "/burn", "/freegames", "/calc")))
 check("ASK_SYSTEM carries the KB", "knowledge base" in bot.ASK_SYSTEM and "Garuda" in bot.ASK_SYSTEM)
