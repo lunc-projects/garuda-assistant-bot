@@ -559,6 +559,15 @@ async def _is_group_admin(ctx, chat_id, user_id):
     except Exception:
         return False
 
+async def _can_change(update, ctx):
+    """Settings-change permission: anyone in a private chat (their own
+    settings); in a group, admins/creator only. (Forked from the LUNC
+    Assistant Bot; its definition was dropped in the fork, leaving the
+    call sites raising NameError — restored 2026-10-26.)"""
+    chat = update.effective_chat
+    if chat.type == "private": return True
+    return await _is_group_admin(ctx, chat.id, update.effective_user.id)
+
 async def _can_moderate(update, ctx):
     uid = update.effective_user.id
     if _is_owner(uid) or store.is_elevated(uid):
