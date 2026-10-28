@@ -16,6 +16,24 @@ DAILY_LIMIT_NOTE = ("⏳ Daily limit reached — be back soon! AI answers are pa
                      "until more tokens come at midnight UTC. The bot still works "
                      "for simple commands and basic summaries.")
 
+# --- No re-tagging (owner rule, 2026-10-28): summary output must never
+# carry @usernames — Telegram turns them into live mentions and pings
+# those people. The summary prompt asks for plain names, and this
+# sanitizer is the deterministic guarantee on every summary-family
+# output: it strips the "@" from a Telegram handle (@[A-Za-z0-9_]{3,})
+# when the @ starts a token (start of string, or preceded by anything
+# that is not a word character — whitespace, opening punctuation, …),
+# leaving the bare name. An "@" preceded by a word character stays, so
+# email addresses (name@example.com) are never mangled.
+_MENTION_RE = re.compile(r"(?<![A-Za-z0-9_])@([A-Za-z0-9_]{3,})")
+
+def strip_mentions(text: str) -> str:
+    """Remove the '@' from Telegram handles at token starts in `text`,
+    leaving the bare name ('@alice' -> 'alice'). Emails untouched."""
+    if not text:
+        return text
+    return _MENTION_RE.sub(r"\1", text)
+
 def with_lang(messages, lang="en"):
     """Append the reply-language instruction to the system message (if any).
     Pure function — unit-testable without network. Unknown codes fall back
@@ -82,17 +100,16 @@ def extractive_summary(rows, detailed=False) -> str:
         if t: lines.append(f"• {r['user_name']}: {t}")
     if not AI_API_KEY:
         lines.append("\nℹ️ Add AI_API_KEY in Railway for full AI summaries — this is the no-key fallback view.")
-    return "\n".join(lines)
+    # Quoted messages can carry @handles — never re-post them as live
+    # mentions (owner rule, see strip_mentions).
+    return strip_mentions("\n".join(lines))
 
-SUMMARY_SYSTEM = """You are Garuda Assistant Bot. Summarize Telegram group messages into a quick, scannable summary.
-Format exactly:
-⚡ TL;DR (3 lines max)
-📌 Key Topics (bullets, who raised what matters)
-✅ Decisions Made (or 'None clear')
-❓ Unanswered Questions
-🔗 Links / Contracts / Proposals Mentioned (deduped, or 'None')
-📋 Action Items (with @name if named, or 'None')
-Be accurate, do not invent messages, contracts, or decisions not in the log. Keep it tight: short bullets, no filler, whole summary well under 500 tokens."""
+SUMMARY_SYSTEM = """You are Garuda Assistant Bot. Summarize Telegram group messages into a SHORT summary.
+Hard rules:
+- At most 5 short lines and about 450 characters total. Key points only — no padding, no filler, no repeating a point, no empty sections.
+- Refer to people by plain display name only. NEVER write @usernames — Telegram turns them into live mentions and pings those people.
+- Be accurate: do not invent messages, contracts, or decisions not in the log.
+Format: first line starts "⚡ TL;DR — " with the one-line gist. Then up to 4 short bullets (•) covering what actually came up: the main topics (who raised what matters), any clear decisions, unanswered questions, action items (with the person's plain name if named), and links/contracts/proposals mentioned (deduped). Use only as many bullets as there is real content for — fewer words per point, never drop a main topic to save space."""
 
 async def summarize(rows, detailed=False, kb_text="", lang="en") -> str:
     if not rows:
@@ -102,7 +119,7 @@ async def summarize(rows, detailed=False, kb_text="", lang="en") -> str:
     # pot lasts — summaries are the biggest input cost, and 10k chars still
     # covers a busy group)
     transcript = transcript[-TRANSCRIPT_CHARS:]
-    system = SUMMARY_SYSTEM + ("\nGive more detail per topic." if detailed else "")
+    system = SUMMARY_SYSTEM + ("\nDetailed version: a little more detail per point is fine, but keep it tight and never use @usernames." if detailed else "")
     if kb_text:
         system += "\n\n" + kb_text
     out = await chat([
@@ -112,4 +129,6 @@ async def summarize(rows, detailed=False, kb_text="", lang="en") -> str:
     if out is None and budget.exhausted():
         # Pot empty: the bot still works — basic summary plus the note.
         return extractive_summary(rows, detailed) + "\n\n" + DAILY_LIMIT_NOTE
-    return out or extractive_summary(rows, detailed)
+    # The prompt asks for plain names; strip_mentions is the guarantee
+    # that no @handle ever reaches the chat as a live mention.
+    return strip_mentions(out) if out else extractive_summary(rows, detailed)
