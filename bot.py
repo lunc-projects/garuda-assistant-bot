@@ -11,7 +11,7 @@ import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-import store, ai_client, chain, garuda, lang as lang_mod, ratelimit, budget, modquiz, topics, seclogic, alerts as alerts_mod
+import store, ai_client, chain, garuda, lang as lang_mod, ratelimit, budget, modquiz, topics, seclogic, alerts as alerts_mod, stats_report
 from kb import kb_as_text, find_kb_answer
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -139,6 +139,14 @@ async def on_botstats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"People who've used me in DM (settings/catchup): {u['dm_users']}\n"
         f"Messages currently logged: {u['messages']}\n"
         f"Daily AI pot used today (UTC): {budget.spent():,} / {budget.DAILY_TOKEN_BUDGET:,} estimated tokens", parse_mode=ParseMode.MARKDOWN)
+
+
+async def job_stats_publish(ctx: ContextTypes.DEFAULT_TYPE):
+    """Publish this bot's counts to the shared stats DB every ~30 min
+    (silent no-op until UPSTASH_STATS_* is configured), where the LUNC
+    Assistant bot reads them for the combined daily report."""
+    await stats_report.publish()
+
 
 def user_lang(update):
     """The requester's language. Personal, never a group setting: one user
@@ -2043,6 +2051,7 @@ def main():
         app.job_queue.run_repeating(job_captcha_sweep, interval=60, first=30)
         app.job_queue.run_repeating(job_fresh_sweep, interval=600, first=90)
         app.job_queue.run_repeating(job_scam_alerts, interval=1800, first=300)
+        app.job_queue.run_repeating(job_stats_publish, interval=1800, first=240)  # publish counts for the combined daily report
     print("Garuda Assistant Bot polling…")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
