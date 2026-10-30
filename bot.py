@@ -6,12 +6,13 @@ live Garuda data (/dex, /staking, /farms), DM summary.
 Standalone — Garuda only, no other projects included.
 Run: TELEGRAM_BOT_TOKEN=... AI_API_KEY=... python bot.py
 """
-import os, re, time, json, datetime, pathlib
+import os, re, time, json, datetime, pathlib, asyncio
 import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import store, ai_client, chain, garuda, lang as lang_mod, ratelimit, budget, modquiz, topics, seclogic, alerts as alerts_mod, stats_report
+import wallet_security as ws_mod
 from kb import kb_as_text, find_kb_answer
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -50,6 +51,11 @@ Or just @mention me in the group, or DM me
 /proposal <id> — proposal detail + live tally
 /wallet terra1... — public wallet balance + staking
 /token terra1... — CW20 token info
+
+*Wallet Security (DM only)*
+/security — how Wallet Security works
+/watch terra1... — watch YOUR OWN wallet in DM: balance, Garuda staking and NFT changes are DM'd to you, and only you (read-only, addresses only — no keys ever, and it cannot prevent or reverse anything)
+/watching — your watched wallets · /unwatch terra1... — stop watching · /watch off — pause alerts
 
 *Info*
 /links — verified Garuda links only
@@ -129,16 +135,215 @@ async def send_long(update, text):
 
 async def on_botstats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Owner-only usage counter (not in the public command list).
+    # Counts ONLY — Wallet Security contributes its watch count and the
+    # last successful sweep time, never a wallet address or a user name.
     if not OWNER_ID or update.effective_user.id != OWNER_ID:
         return
     u = store.usage_counts()
+    last_ok = store.ws_meta_get("last_sweep_ok_ts")
+    if last_ok:
+        sweep_line = datetime.datetime.fromtimestamp(
+            int(last_ok), datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    else:
+        sweep_line = "never yet"
     await update.message.reply_text(
         "*Bot usage* (since the last deploy — the log resets on redeploys, 7-day rolling)\n"
-        f"Groups I'm in and logging: {u['groups']}\n"
-        f"People seen talking in those groups: {u['people_in_groups']}\n"
-        f"People who've used me in DM (settings/catchup): {u['dm_users']}\n"
+        f"Users seen: {u['people_in_groups'] + u['dm_users']} "
+        f"(in groups: {u['people_in_groups']}, in DM: {u['dm_users']})\n"
+        f"Active groups I'm in and logging: {u['groups']}\n"
+        f"AI questions today (UTC): {ratelimit.questions_today()}\n"
         f"Messages currently logged: {u['messages']}\n"
-        f"Daily AI pot used today (UTC): {budget.spent():,} / {budget.DAILY_TOKEN_BUDGET:,} estimated tokens", parse_mode=ParseMode.MARKDOWN)
+        f"Daily AI pot used today (UTC): {budget.spent():,} / {budget.DAILY_TOKEN_BUDGET:,} estimated tokens\n"
+        f"Wallet Security watches registered: {store.wallet_watch_count()}\n"
+        f"Wallet Security last successful sweep: {sweep_line}", parse_mode=ParseMode.MARKDOWN)
+
+
+# --- Wallet Security (personal wallet monitoring; DM-first, read-only) ---
+# Registration and alerts live in DM only: in a group the commands just
+# point the member to DM, so a wallet address is never set up (or
+# listed) publicly, and a wallet's watch status is visible only to its
+# registrant. All Wallet Security sends are plain text (no Markdown).
+_WS_BOOT = {"last_ok_before_boot": None, "resume_sent": False}
+try:
+    _WS_BOOT["last_ok_before_boot"] = store.ws_meta_get("last_sweep_ok_ts")
+except Exception:
+    pass
+
+
+def _is_private(update):
+    chat = update.effective_chat
+    return chat is not None and chat.type == "private"
+
+
+async def on_security(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(ws_mod.INTRO)
+
+
+async def _ws_take_baseline(user_id, address):
+    """Silent registration baseline: a COMPLETE chain read, stored
+    without alerting (the first check never alerts). False on any
+    failed/partial read — the caller then refuses the registration
+    honestly instead of watching from a guessed state."""
+    reader = ws_mod.ChainReader()
+    try:
+        async with reader._client_factory() as client:
+            universe = await ws_mod.build_token_universe(reader, client)
+            nft_staking = await ws_mod.scan_nft_staking(reader, client)
+            snapshot = await ws_mod.build_snapshot(reader, client, address, universe, nft_staking)
+    except Exception:
+        return False
+    store.wallet_watch_set_snapshot(user_id, address, snapshot)
+    store.wallet_watch_touch(user_id, address, int(time.time()))
+    return True
+
+
+async def on_watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _is_private(update):
+        await update.message.reply_text(ws_mod.GROUP_REDIRECT)
+        return
+    user_id = update.effective_user.id
+    args = ctx.args or []
+    if not args:
+        await update.message.reply_text(ws_mod.INTRO)
+        return
+    head = args[0].lower()
+    if head == "off":
+        store.wallet_watch_set_alerts(user_id, False)
+        await update.message.reply_text(
+            "Wallet Security alerts are paused for your wallets. "
+            "Send /watch on to resume them.")
+        return
+    if head == "on":
+        store.wallet_watch_set_alerts(user_id, True)
+        await update.message.reply_text("Wallet Security alerts are back on for your wallets.")
+        return
+    address = args[0].strip()
+    if not ws_mod.valid_terra_address(address):
+        await update.message.reply_text(
+            "That does not look like a valid Terra Classic address — it should start with "
+            "terra1 and pass the address checksum. Nothing was registered. Check the address "
+            "and send /watch terra1... again.")
+        return
+    mine = store.wallet_watches_for_user(user_id)
+    if any(w["address"] == address for w in mine):
+        await update.message.reply_text(
+            f"You are already watching this wallet:\n{address}\nSend /watching to see your wallets.")
+        return
+    if len(mine) >= ws_mod.MAX_WATCHES_PER_USER:
+        await update.message.reply_text(
+            f"Wallet Security covers up to {ws_mod.MAX_WATCHES_PER_USER} wallets per person, and you "
+            "already have 3 registered. /unwatch one first, then add the new one.")
+        return
+    store.wallet_watch_add(user_id, address, int(time.time()))
+    if not await _ws_take_baseline(user_id, address):
+        store.wallet_watch_remove(user_id, address)
+        await update.message.reply_text(
+            "I could not get a complete read of that wallet from the chain just now, so I have "
+            "NOT registered it — Wallet Security never starts from a partial read. Please try "
+            "/watch again in a few minutes.")
+        return
+    await update.message.reply_text(
+        "✅ Wallet Security is now watching this wallet:\n"
+        f"{address}\n"
+        f"View on Finder: {ws_mod.finder_address(address)}\n"
+        "I took a starting snapshot just now (no alert for what is already there). "
+        "From here on I check about every 15 minutes and DM you here — and only you — "
+        "if balances, Garuda staking positions or NFTs change.\n"
+        "Reminder: this detects and notifies; it cannot prevent or reverse anything. "
+        "Addresses only, read-only — never share your seed phrase with anyone, including me.")
+
+
+async def on_watching(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _is_private(update):
+        await update.message.reply_text(ws_mod.GROUP_REDIRECT)
+        return
+    mine = store.wallet_watches_for_user(update.effective_user.id)
+    if not mine:
+        await update.message.reply_text(
+            "You are not watching any wallets yet. Send /watch terra1... to start — /security explains how it works.")
+        return
+    lines = ["🔐 Your Wallet Security wallets:"]
+    for w in mine:
+        if w["last_checked_ts"]:
+            when = datetime.datetime.fromtimestamp(
+                w["last_checked_ts"], datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        else:
+            when = "not checked yet"
+        paused = " · alerts PAUSED (/watch on resumes)" if not w["alerts_on"] else ""
+        lines.append(f"• {w['address']}\n  Last checked: {when}{paused}")
+    await update.message.reply_text("\n".join(lines))
+
+
+async def on_unwatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _is_private(update):
+        await update.message.reply_text(ws_mod.GROUP_REDIRECT)
+        return
+    args = ctx.args or []
+    if not args:
+        await update.message.reply_text("Send /unwatch terra1... with the wallet to stop watching.")
+        return
+    address = args[0].strip()
+    if store.wallet_watch_remove(update.effective_user.id, address):
+        await update.message.reply_text(f"Wallet Security stopped for:\n{address}")
+    else:
+        await update.message.reply_text(
+            "That wallet is not on your watch list. Send /watching to see your wallets.")
+
+
+async def job_wallet_security(ctx: ContextTypes.DEFAULT_TYPE):
+    """The ~15-minute Wallet Security sweep + the startup resume notice
+    (sent once, after the first successful sweep of this process)."""
+    async def send_dm(user_id, text):
+        await ctx.bot.send_message(user_id, text)  # plain text on purpose
+
+    async def owner_alert(text):
+        if OWNER_ID:
+            try:
+                await ctx.bot.send_message(OWNER_ID, text)
+            except Exception:
+                pass
+
+    try:
+        first = not _WS_BOOT["resume_sent"]
+        result = await ws_mod.run_sweep(
+            send_dm, owner_alert=owner_alert,
+            detected_on_return=bool(first and _WS_BOOT["last_ok_before_boot"]))
+        if result["success"] and first:
+            _WS_BOOT["resume_sent"] = True
+            await ws_mod.send_resume_notices(
+                send_dm, last_ok_before_boot=_WS_BOOT["last_ok_before_boot"])
+    except Exception as e:
+        print(f"wallet security sweep job: {type(e).__name__}: {e}")
+
+
+async def job_wallet_watchdog(ctx: ContextTypes.DEFAULT_TYPE):
+    """Missed-sweep watchdog: pages the owner if no successful Wallet
+    Security sweep completes within 2x the sweep interval."""
+    async def owner_alert(text):
+        if OWNER_ID:
+            try:
+                await ctx.bot.send_message(OWNER_ID, text)
+            except Exception:
+                pass
+
+    try:
+        await ws_mod.watchdog_check(owner_alert)
+    except Exception as e:
+        print(f"wallet security watchdog: {type(e).__name__}: {e}")
+
+
+async def post_shutdown(app: Application):
+    """Graceful shutdown (redeploy/SIGTERM): best-effort DM to every
+    watcher that their wallet is temporarily unprotected while the
+    security update runs. A hard crash skips this — the startup resume
+    notice then carries the news on its own."""
+    try:
+        async def send_dm(user_id, text):
+            await app.bot.send_message(user_id, text)  # plain text on purpose
+
+        await asyncio.wait_for(ws_mod.send_downtime_notices(send_dm), timeout=20)
+    except Exception as e:
+        print(f"wallet security downtime notices: {type(e).__name__}: {e}")
 
 
 async def job_stats_publish(ctx: ContextTypes.DEFAULT_TYPE):
@@ -1957,7 +2162,7 @@ async def post_init(app: Application):
         await app.bot.set_my_short_description("Group summaries + Garuda DeFi assistant: live DEX, staking and farms data.")
         await app.bot.set_my_commands([
             ("summary","Summarize group messages"),("catchup","What you missed"),("tldr","Shrink a message (reply to it)"),
-            ("ask","Ask me anything"),("dex","Garuda DEX overview (live)"),("staking","Garuda staking status (live)"),("farms","Garuda farms overview (live)"),("proposals","Proposals voting now"),("proposal","Proposal + tally"),("price","LUNC + USTC price"),("stats","Chain stats"),("govalerts","Proposal alerts on/off"),("wallet","Public wallet lookup"),("token","CW20 token info"),("rank","Your rank in this chat"),("language","Choose your language"),("privacy","Privacy & security info"),("protect","Request scam protection (group admins)"),("aiban","AI-ban a user (moderators)"),("appeal","Appeal a ban (in DM)"),("rules","This group's rules"),("menu","Buttons menu — no typing"),("panel","Admin panel (group admins)"),("help","All commands")])
+            ("ask","Ask me anything"),("dex","Garuda DEX overview (live)"),("staking","Garuda staking status (live)"),("farms","Garuda farms overview (live)"),("proposals","Proposals voting now"),("proposal","Proposal + tally"),("price","LUNC + USTC price"),("stats","Chain stats"),("govalerts","Proposal alerts on/off"),("wallet","Public wallet lookup"),("token","CW20 token info"),("security","Wallet Security — watch your own wallet"),("watch","Watch your own wallet (DM me)"),("watching","Your watched wallets"),("rank","Your rank in this chat"),("language","Choose your language"),("privacy","Privacy & security info"),("protect","Request scam protection (group admins)"),("aiban","AI-ban a user (moderators)"),("appeal","Appeal a ban (in DM)"),("rules","This group's rules"),("menu","Buttons menu — no typing"),("panel","Admin panel (group admins)"),("help","All commands")])
         # Profile photo (owner's logo) — re-applied on boot so redeploys never lose it
         await _apply_profile_photo()
         print("Garuda Assistant Bot: description + commands set")
@@ -1969,7 +2174,7 @@ async def post_init(app: Application):
 def main():
     if not TOKEN:
         raise SystemExit("TELEGRAM_BOT_TOKEN is missing — paste it in Railway env vars (never in chat/repo).")
-    _builder = Application.builder().token(TOKEN).post_init(post_init)
+    _builder = Application.builder().token(TOKEN).post_init(post_init).post_shutdown(post_shutdown)
     _proxy = os.getenv("OUTBOUND_PROXY")
     if _proxy: _builder = _builder.proxy(_proxy).get_updates_proxy(_proxy)
     app = _builder.build()
@@ -2033,6 +2238,11 @@ def main():
     app.add_handler(CommandHandler("faq", on_faq))
     app.add_handler(CommandHandler("addfaq", on_addfaq))
     app.add_handler(CommandHandler("delfaq", on_delfaq))
+    app.add_handler(CommandHandler("security", on_security))
+    app.add_handler(CommandHandler("aisecurity", on_security))
+    app.add_handler(CommandHandler("watch", on_watch))
+    app.add_handler(CommandHandler("watching", on_watching))
+    app.add_handler(CommandHandler("unwatch", on_unwatch))
     app.add_handler(CommandHandler("menu", on_menu))
     app.add_handler(CommandHandler("panel", on_panel))
     app.add_handler(CommandHandler("cancel", on_cancel))
@@ -2055,6 +2265,8 @@ def main():
         app.job_queue.run_repeating(job_fresh_sweep, interval=600, first=90)
         app.job_queue.run_repeating(job_scam_alerts, interval=1800, first=300)
         app.job_queue.run_repeating(job_stats_publish, interval=1800, first=240)  # publish counts for the combined daily report
+        app.job_queue.run_repeating(job_wallet_security, interval=ws_mod.SWEEP_INTERVAL_SECONDS, first=120)  # Wallet Security sweep (~15 min)
+        app.job_queue.run_repeating(job_wallet_watchdog, interval=300, first=180)  # Wallet Security missed-sweep watchdog
     print("Garuda Assistant Bot polling…")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 

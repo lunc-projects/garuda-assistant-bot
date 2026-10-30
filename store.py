@@ -567,3 +567,104 @@ def pending_groups():
     c = _conn()
     rows = c.execute("SELECT * FROM mod_groups WHERE approved=0 ORDER BY chat_id").fetchall()
     c.close(); return rows
+
+
+# --- Wallet Security (personal wallet monitoring, 2026-10-29) ---
+# A watch belongs to exactly one Telegram user; the snapshot is the
+# last COMPLETE chain read, stored as JSON. The owner (Tom) never gets
+# a feed of these rows — /botstats reads only wallet_watch_count().
+# Health state lives in wallet_security_meta (last successful sweep,
+# consecutive failures, alert-episode flags) so the "never fail
+# silently" net survives redeploys on the /data volume.
+
+def _ws_conn():
+    c = _conn()
+    c.execute("""CREATE TABLE IF NOT EXISTS wallet_watches(
+        user_id INTEGER, address TEXT, alerts_on INTEGER DEFAULT 1,
+        created_ts INTEGER, last_checked_ts INTEGER,
+        snapshot TEXT, last_alert_hash TEXT,
+        PRIMARY KEY(user_id, address))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS wallet_security_meta(
+        key TEXT PRIMARY KEY, value TEXT)""")
+    return c
+
+def wallet_watch_add(user_id, address, ts):
+    c = _ws_conn()
+    c.execute("INSERT OR IGNORE INTO wallet_watches(user_id,address,alerts_on,created_ts) VALUES(?,?,1,?)",
+              (user_id, address, ts))
+    c.commit(); c.close()
+
+def wallet_watch_remove(user_id, address):
+    c = _ws_conn()
+    cur = c.execute("DELETE FROM wallet_watches WHERE user_id=? AND address=?", (user_id, address))
+    c.commit(); n = cur.rowcount; c.close(); return n
+
+def wallet_watch_get(user_id, address):
+    c = _ws_conn()
+    r = c.execute("SELECT * FROM wallet_watches WHERE user_id=? AND address=?", (user_id, address)).fetchone()
+    c.close()
+    return _watch_row(r) if r else None
+
+def wallet_watches_for_user(user_id):
+    c = _ws_conn()
+    rows = c.execute("SELECT * FROM wallet_watches WHERE user_id=? ORDER BY created_ts", (user_id,)).fetchall()
+    c.close()
+    return [_watch_row(r) for r in rows]
+
+def wallet_watches_all():
+    c = _ws_conn()
+    rows = c.execute("SELECT * FROM wallet_watches ORDER BY user_id, created_ts").fetchall()
+    c.close()
+    return [_watch_row(r) for r in rows]
+
+def _watch_row(r):
+    import json as _json
+    return {
+        "user_id": r["user_id"], "address": r["address"],
+        "alerts_on": r["alerts_on"], "created_ts": r["created_ts"],
+        "last_checked_ts": r["last_checked_ts"],
+        "snapshot": _json.loads(r["snapshot"]) if r["snapshot"] else None,
+        "last_alert_hash": r["last_alert_hash"],
+    }
+
+def wallet_watch_set_alerts(user_id, on):
+    c = _ws_conn()
+    c.execute("UPDATE wallet_watches SET alerts_on=? WHERE user_id=?", (1 if on else 0, user_id))
+    c.commit(); c.close()
+
+def wallet_watch_touch(user_id, address, ts):
+    c = _ws_conn()
+    c.execute("UPDATE wallet_watches SET last_checked_ts=? WHERE user_id=? AND address=?", (ts, user_id, address))
+    c.commit(); c.close()
+
+def wallet_watch_set_snapshot(user_id, address, snapshot):
+    import json as _json
+    c = _ws_conn()
+    c.execute("UPDATE wallet_watches SET snapshot=? WHERE user_id=? AND address=?",
+              (_json.dumps(snapshot), user_id, address))
+    c.commit(); c.close()
+
+def wallet_watch_set_alert_hash(user_id, address, digest):
+    c = _ws_conn()
+    c.execute("UPDATE wallet_watches SET last_alert_hash=? WHERE user_id=? AND address=?",
+              (digest, user_id, address))
+    c.commit(); c.close()
+
+def wallet_watch_count():
+    """Counts only — the ONLY Wallet Security figure the owner sees."""
+    c = _ws_conn()
+    n = c.execute("SELECT COUNT(*) FROM wallet_watches").fetchone()[0]
+    c.close()
+    return n
+
+def ws_meta_get(key, default=None):
+    c = _ws_conn()
+    r = c.execute("SELECT value FROM wallet_security_meta WHERE key=?", (key,)).fetchone()
+    c.close()
+    return r["value"] if r else default
+
+def ws_meta_set(key, value):
+    c = _ws_conn()
+    c.execute("INSERT INTO wallet_security_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+              (key, str(value)))
+    c.commit(); c.close()

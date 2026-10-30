@@ -30,6 +30,7 @@ RANK_CAPS = {0: (2, 10), 1: (4, 20), 2: (6, 30)}
 
 _user_counts: dict[int, list] = {}  # user_id -> [utc_day, count]
 _chat_counts: dict[int, list] = {}  # chat_id -> [utc_day, count]
+_total_today: list = [None, 0]      # [utc_day, total allowed AI calls] — /botstats "AI questions today"
 
 
 def _utc_day(now):
@@ -66,7 +67,17 @@ def allowed_for_rank(user_id, chat_id, owner_id=0, rank=1, now=None):
         return False
     _bump(_user_counts, user_id, day)
     _bump(_chat_counts, chat_id, day)
+    if _total_today[0] != day:
+        _total_today[0], _total_today[1] = day, 0
+    _total_today[1] += 1
     return True
+
+
+def questions_today(now=None):
+    """Total AI calls allowed today (UTC) across all users/chats —
+    the /botstats figure. Owner-exempt calls are not counted."""
+    now = time.time() if now is None else now
+    return _total_today[1] if _total_today[0] == _utc_day(now) else 0
 
 
 def allowed(user_id, chat_id, owner_id=0, now=None):
@@ -77,3 +88,4 @@ def allowed(user_id, chat_id, owner_id=0, now=None):
 def reset():
     _user_counts.clear()
     _chat_counts.clear()
+    _total_today[0], _total_today[1] = None, 0
