@@ -31,8 +31,9 @@ def configured():
 
 def current_counts():
     """This bot's counts, from the same source /botstats uses:
-    store.usage_counts() plus the AI pot (budget)."""
-    import budget
+    store.usage_counts(). The pot fields are kept (as zeros) so the
+    combined daily report's payload shape is unchanged — AI was
+    removed from this bot on 2026-11-13, so nothing is ever spent."""
     import store
     u = store.usage_counts()
     return {
@@ -40,8 +41,8 @@ def current_counts():
         "people_in_groups": u["people_in_groups"],
         "dm_users": u["dm_users"],
         "messages_logged": u["messages"],
-        "pot_spent": budget.spent(),
-        "pot_budget": budget.DAILY_TOKEN_BUDGET,
+        "pot_spent": 0,
+        "pot_budget": 0,
     }
 
 

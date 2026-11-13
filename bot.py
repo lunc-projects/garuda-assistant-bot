@@ -1,42 +1,38 @@
 #!/usr/bin/env python3
-"""Garuda Assistant Bot — AI assistant for Garuda DeFi groups.
-Core: summarize hundreds of messages into a quick summary.
-Also: /catchup, /tldr, /ask (Garuda knowledge base + general AI Q&A),
-live Garuda data (/dex, /staking, /farms), DM summary.
+"""Garuda Assistant Bot — assistant for Garuda DeFi groups.
+Live Garuda data (/dex, /staking, /farms), chain data (/price,
+/proposals, /wallet, /token), a verified-facts knowledge base (/ask),
+Wallet Security watches, and the group protection / moderation suite.
+AI features were REMOVED on 2026-11-13 (owner order): this bot makes
+no AI calls — ai_client.py / budget.py / ratelimit.py remain in the
+tree for reference only and are not imported.
 Standalone — Garuda only, no other projects included.
-Run: TELEGRAM_BOT_TOKEN=... AI_API_KEY=... python bot.py
+Run: TELEGRAM_BOT_TOKEN=... python bot.py
 """
 import os, re, time, json, datetime, pathlib, asyncio
 import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-import store, ai_client, chain, garuda, lang as lang_mod, ratelimit, budget, modquiz, topics, seclogic, alerts as alerts_mod, stats_report
+import store, chain, garuda, lang as lang_mod, modquiz, topics, seclogic, alerts as alerts_mod, stats_report
 import wallet_security as ws_mod
-from kb import kb_as_text, find_kb_answer
+from kb import find_kb_answer
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0") or 0)
-# AI kill switch — True means AI features are live, governed by rank,
-# daily caps, and the daily token pot (budget.py: 200,000/day, the Groq
-# free allowance). Flip to False to disable ALL AI again. Simple (non-AI)
-# commands keep working either way.
-AI_ENABLED = True
+# AI removal (2026-11-13, owner order): every AI feature is off for
+# this bot, permanently. The old AI commands stay registered only so
+# they can answer this one line instead of failing silently.
+AI_OFF_LINE = "AI features are off for this bot."
 LCD = "https://terra-classic-lcd.publicnode.com"
 
 HELP = """🦅 *Garuda Assistant Bot*
 
-*Summaries (main job)*
-/summary — last 200 messages
-/summary 300 — last 300 messages
-/summary 24h / /summary today / /summary 1h
-/summary detailed — longer version
-/catchup — what you missed since your last /catchup
-/tldr — reply to a long message to shrink it
+*AI features*
+🤖 AI features are off for this bot — /summary, /catchup, /tldr and AI answers are disabled. Everything below is live data, verified facts and moderation — no AI is used anywhere.
 
 *Ask me*
-/ask <question> — Garuda questions get instant answers from the knowledge base; anything else goes to the AI
-Or just @mention me in the group, or DM me
+/ask <question> — Garuda questions get instant answers from the built-in knowledge base (verified facts only, no AI)
 
 *Garuda DeFi — live on-chain*
 /dex — Garuda DEX overview (live)
@@ -60,26 +56,19 @@ Or just @mention me in the group, or DM me
 *Info*
 /links — verified Garuda links only
 /safety — scam / seed phrase safety rules
-/privacy — what this bot logs, what the AI sees, what it can never do
+/privacy — what this bot logs and what it can never do
 /learn <word> — plain-English glossary (e.g. /learn quorum)
 
-*Ranks (AI access)*
-/rank — your rank + what it unlocks
-Rank 0: starting out, 2 AI queries/day · Rank 1: regular (3+ days), 4 AI queries/day · Rank 2: trusted (30+ days), 6 AI queries/day
+*Ranks*
+/rank — your rank in this chat
 Rank is earned by chatting on distinct days (not message count). Owner: /rankset, /rankclear (in groups)
-
-*Daily AI pot*
-200,000 tokens a day (the free-plan allowance). When the pot runs out, AI pauses with a "daily limit reached" note until midnight UTC — simple commands and basic summaries keep working.
-
-*AI in this group*
-Group admins can turn AI off or on for this group only: /aioff, /aion. Default is on.
 
 *Group protection (opt-in)*
 /protect — group admins: request scam protection for this group (the owner approves it)
 Protection means: new joiners pass a short safety check in my DM before they can post · accounts on the network's global scam-ban list are removed on sight · a member whose first message contains a link is removed
 /gban — reply to a scammer's message (or /gban <user id>): ban them from every protected group
 /gunban <user id> — lift a global ban · /gbans — see the ban list
-/aiban — reply to an abusive user (or /aiban <user id>): block ALL AI features for them — simple commands still work · /aiunban <user id> lifts it · /aibans lists them
+/aiban — reply to a user (or /aiban <user id>): adds them to the AI-ban list · /aiunban <user id> lifts it · /aibans lists them (kept for records and appeals — AI features are off bot-wide)
 Safety rails on bans: every global ban is written to a permanent log, the owner is alerted instantly with a one-tap undo button, non-owner moderators can global-ban at most 5 people a day, and nobody but the owner can global-ban the owner, an elevated user, or an admin of a protected group. /modlog (owner only) shows the record.
 /appeal — in my DM: if you're on the global ban or AI ban list, ask the owner to review it (once a day)
 Automatic in protected groups: message flooding = delete + timed mute · the same long message posted across protected groups = deleted + muted + flagged to the owner · brand-new-looking accounts (no username, no profile photo) pass the safety check but start text-only for 24 hours · first-message links to official sites (Finder, Station, Keplr, Ledger) are allowed
@@ -99,7 +88,7 @@ Type a hashtag in chat — #staking, #safety, #memo… — and I'll answer it. #
 /faq — this group's saved questions · /faq <question> shows an answer · just typing the question in chat works too
 /addfaq — group admins save an FAQ (it walks you through it step by step; /delfaq <question> removes one)
 /menu — buttons for the everyday stuff (price, DEX, safety…) — no commands to remember
-/panel — group admins: tap switches for AI, scam reminders, and protection
+/panel — group admins: tap switches for scam reminders and protection
 
 *Notifications (your choice, on/off)*
 /govalerts — proposal / voting notifications menu (new, ending soon, result)
@@ -107,31 +96,38 @@ Type a hashtag in chat — #staking, #safety, #memo… — and I'll answer it. #
 In a group, only admins can change group settings. In DM, it's just for you.
 
 *Other*
-/language — choose your language (summaries + answers follow it)
+/language — choose your language (bot texts follow it)
 /help — this list
-In DM: forward / paste any long text and I'll summarize it.
 """
 
-def parse_summary_args(args, chat_id):
-    detailed = "detailed" in args
-    args = [a for a in args if a != "detailed"]
-    now = int(time.time())
-    if not args:
-        return store.get_messages(chat_id, limit=200), detailed
-    a = args[0].lower()
-    if a in ("today",): return store.get_messages(chat_id, limit=1000, since_ts=now - (now % 86400)), detailed
-    if a.endswith("h"):
-        try: return store.get_messages(chat_id, limit=1000, since_ts=now - int(a[:-1])*3600), detailed
-        except: pass
-    if a.endswith("d"):
-        try: return store.get_messages(chat_id, limit=1000, since_ts=now - int(a[:-1])*86400), detailed
-        except: pass
-    try: return store.get_messages(chat_id, limit=int(a)), detailed
-    except: return store.get_messages(chat_id, limit=200), detailed
+def _line_chunks(text, limit=3900):
+    """Split on line boundaries — never inside a normal line, so a Markdown
+    link can never be cut in half. A single line longer than the limit
+    (pathological) is hard-split, so NO returned chunk ever exceeds the
+    limit: a send built from these chunks cannot be rejected by Telegram
+    as too long."""
+    lines = []
+    for line in text.splitlines():
+        while len(line) > limit:
+            lines.append(line[:limit]); line = line[limit:]
+        lines.append(line)
+    chunks, cur = [], ""
+    for line in lines:
+        if cur and len(cur) + 1 + len(line) > limit:
+            chunks.append(cur); cur = line
+        else:
+            cur = f"{cur}\n{line}" if cur else line
+    if cur:
+        chunks.append(cur)
+    return chunks or [text]
 
-async def send_long(update, text):
-    for i in range(0, len(text), 3900):
-        await update.message.reply_text(text[i:i+3900])
+async def send_long(update, text, parse_mode=None):
+    """Send text of any length as sequential messages, each safely under
+    Telegram's 4096-char limit (chunks capped at 3900, split on line
+    boundaries). Use for EVERY reply that can grow — /help, lists,
+    summaries."""
+    for ch in _line_chunks(text):
+        await update.message.reply_text(ch, parse_mode=parse_mode)
 
 async def on_botstats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Owner-only usage counter (not in the public command list).
@@ -151,9 +147,7 @@ async def on_botstats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"Users seen: {u['people_in_groups'] + u['dm_users']} "
         f"(in groups: {u['people_in_groups']}, in DM: {u['dm_users']})\n"
         f"Active groups I'm in and logging: {u['groups']}\n"
-        f"AI questions today (UTC): {ratelimit.questions_today()}\n"
         f"Messages currently logged: {u['messages']}\n"
-        f"Daily AI pot used today (UTC): {budget.spent():,} / {budget.DAILY_TOKEN_BUDGET:,} estimated tokens\n"
         f"Wallet Security watches registered: {store.wallet_watch_count()}\n"
         f"Wallet Security last successful sweep: {sweep_line}", parse_mode=ParseMode.MARKDOWN)
 
@@ -371,7 +365,10 @@ async def on_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(lang_mod.t("intro", lg), reply_markup=lang_mod.lang_keyboard())
 
 async def on_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(HELP, parse_mode=ParseMode.MARKDOWN)
+    # HELP is 5,518 chars — OVER Telegram's 4096-char limit. Sent raw, this
+    # was rejected live with BadRequest "Message is too long" (owner alert
+    # 2026-11-09 01:30 UTC). Always send it chunked via send_long.
+    await send_long(update, HELP, parse_mode=ParseMode.MARKDOWN)
 
 async def on_language(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lg = user_lang(update)
@@ -389,11 +386,11 @@ async def on_rank(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         rank, days, override = store.rank_info(chat.id, user.id)
         scope = "in this chat"
     if rank == 0:
-        unlocks = "AI queries at the starter cap: 2 per day. Chat on 3 different days to reach rank 1 (4 per day)."
+        unlocks = "Chat on 3 different days to reach rank 1."
     elif rank == 1:
-        unlocks = "AI queries unlocked (daily cap: 4 per day). Chat on 30 different days to reach rank 2 (6 per day)."
+        unlocks = "Chat on 30 different days to reach rank 2."
     else:
-        unlocks = "AI queries unlocked (top daily cap: 6 per day)."
+        unlocks = "Top rank — thanks for being a regular here."
     extra = " (set by the owner)" if override is not None else ""
     await update.message.reply_text(
         f"🎖 Your rank {scope}: {rank}{extra}\n"
@@ -465,109 +462,21 @@ async def on_lang_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(lang_mod.t("picked", code, name=lang_mod.LABELS[code]),
                               reply_markup=lang_mod.lang_keyboard())
 
-ASK_SYSTEM = ("You are Garuda Assistant Bot, the assistant for Garuda DeFi — a DeFi platform "
-              "built natively on Terra Classic. Answer clearly and concisely. For Garuda questions, "
-              "use the knowledge base below and prefer it over general knowledge; if something is not "
-              "covered, say so instead of inventing details. Never invent contract addresses, links, "
-              "prices, or rates — for live numbers point to the live commands (/dex, /staking, /farms, "
-              "/price, /proposals) and to Finder (finder.terraclassic.community) for on-chain "
-              "verification.\n\n" + kb_as_text())
-
-AI_BANNED_NOTE = (
-    "🚫 AI is off for your account — a moderator put an AI ban on it. "
-    "Simple commands still work: /price, /proposals, /links, /dex, /staking, /farms, /safety. "
-    "If you think this is a mistake, ask a group admin or the bot owner.")
-
-GROUP_AI_OFF_NOTE = (
-    "🔒 AI is turned off in this group by its admins. Simple commands still work: "
-    "/price, /proposals, /links, /dex, /staking, /farms, /safety. "
-    "An admin can turn AI back on with /aion.")
-
-async def ai_guard(update):
-    """AI gate: kill switch, then the group's own AI switch, then the
-    caller's AI ban, then the rank daily caps (2/4/6 by rank).
-    False = message already sent."""
-    if not AI_ENABLED:
-        await update.message.reply_text(
-            "🤖 AI features are temporarily disabled while we review security. "
-            "Simple commands still work: /price, /proposals, /links, /dex, /staking, /farms, /safety. /summary and /catchup also work as basic non-AI summaries while AI is off.")
-        return False
-    if update.effective_chat.type != "private" and not store.ai_enabled(update.effective_chat.id):
-        await update.message.reply_text(GROUP_AI_OFF_NOTE)
-        return False
-    user_id = update.effective_user.id
-    chat = update.effective_chat
-    if user_id != OWNER_ID and store.is_ai_banned(user_id):
-        await update.message.reply_text(AI_BANNED_NOTE)
-        return False
-    if chat.type == "private":
-        rank = store.rank_anywhere(user_id)
-    else:
-        rank = store.rank_for(chat.id, user_id)
-    if ratelimit.allowed_for_rank(user_id, chat.id, OWNER_ID, rank=rank):
-        return True
-    await update.message.reply_text(
-        "⏳ You've hit your daily AI limit — it resets at midnight UTC. (Ranks allow 2, 4, or 6 AI questions a day; this cap protects the bot's AI quota from spam.)")
-    return False
-
-FALLBACK_NOTE = "📋 Basic summary (AI is off — no AI used):\n\n"
-
-def fallback_text(rows, detailed=False):
-    """Local extractive summary for when AI is off. Zero tokens, no AI call,
-    so rank, rate limits, and the daily pot (which protect the Groq quota)
-    do not apply to it."""
-    return FALLBACK_NOTE + ai_client.extractive_summary(rows, detailed=detailed)
+# --- AI features removed (2026-11-13, owner order) -------------------
+# /summary, /catchup and /tldr existed only to run chat text through
+# an AI model — they now answer the one off line and do nothing else.
+# /ask keeps its NON-AI core: instant answers from the built-in,
+# verified-facts knowledge base (kb.py). A question the KB doesn't
+# cover gets the off line — it is never sent to a model.
 
 async def on_summary(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    rows, detailed = parse_summary_args(ctx.args, update.effective_chat.id)
-    if not rows:
-        await update.message.reply_text("No messages logged yet — I can only summarize messages sent after I joined this group. Give it some activity, then try /summary again.")
-        return
-    if not AI_ENABLED:
-        await send_long(update, fallback_text(rows, detailed=detailed))
-        store.set_catchup(update.effective_chat.id, update.effective_user.id)
-        return
-    if not await ai_guard(update): return
-    await update.message.reply_text(f"Summarizing {len(rows)} messages…")
-    out = await ai_client.summarize(rows, detailed=detailed, kb_text=kb_as_text(), lang=user_lang(update))
-    await send_long(update, out)
-    store.set_catchup(update.effective_chat.id, update.effective_user.id)
+    await update.message.reply_text(AI_OFF_LINE)
 
 async def on_catchup(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    cid, uid = update.effective_chat.id, update.effective_user.id
-    last = store.get_catchup_id(cid, uid)
-    if last is None:
-        rows = store.get_messages(cid, limit=200)
-        await update.message.reply_text("First catchup — here's the last 200, and I'll track from here next time.")
-    else:
-        rows = store.get_messages(cid, limit=1000, after_id=last)
-    if not rows:
-        await update.message.reply_text("You're all caught up — no new messages since your last /catchup.")
-        return
-    if not AI_ENABLED:
-        await send_long(update, f"📬 Catchup — {len(rows)} new messages (basic summary, AI off)\n\n{ai_client.extractive_summary(rows)}")
-        store.set_catchup(cid, uid)
-        return
-    if not await ai_guard(update): return
-    out = await ai_client.summarize(rows, kb_text=kb_as_text(), lang=user_lang(update))
-    await send_long(update, f"📬 Catchup — {len(rows)} new messages\n\n{out}")
-    store.set_catchup(cid, uid)
+    await update.message.reply_text(AI_OFF_LINE)
 
 async def on_tldr(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg = update.message.reply_to_message
-    if not msg or not msg.text:
-        await update.message.reply_text("Reply to a long message with /tldr and I'll shrink it.")
-        return
-    if not await ai_guard(update): return
-    out = await ai_client.chat([
-        {"role":"system","content":"Summarize the message in 2-3 short lines. No extra commentary. Refer to people by plain name only — NEVER write @usernames."},
-        {"role":"user","content": msg.text}], lang=user_lang(update))
-    if not out:
-        out = ai_client.DAILY_LIMIT_NOTE if budget.exhausted() else msg.text[:400]
-    # Summary-family output: never send a live @mention (owner rule) —
-    # covers the AI text and the truncated-original fallback alike.
-    out = ai_client.strip_mentions(out)
-    await update.message.reply_text(f"⚡ TL;DR: {out}")
+    await update.message.reply_text(AI_OFF_LINE)
 
 async def on_ask(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = " ".join(ctx.args).strip()
@@ -578,13 +487,7 @@ async def on_ask(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if kb_hit:
         await update.message.reply_text(kb_hit)
         return
-    if not await ai_guard(update): return
-    out = await ai_client.chat([
-        {"role":"system","content": ASK_SYSTEM},
-        {"role":"user","content": q}], lang=user_lang(update))
-    if not out:
-        out = ai_client.DAILY_LIMIT_NOTE if budget.exhausted() else "AI isn't configured yet (no AI_API_KEY). The owner can add the key in Railway and I'll answer fully."
-    await send_long(update, out)
+    await update.message.reply_text(AI_OFF_LINE)
 
 
 # ================= TOP PACK: live info =================
@@ -688,32 +591,14 @@ async def on_safety(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 PRIVACY_TEXT = (
     "🔒 *Privacy & security — what this bot does*\n\n"
     "• *It cannot move funds.* The bot has no wallet, no private keys, and no signing or sending code anywhere. Commands are read-only lookups and settings toggles — plus, only in groups that opted into protection (below), basic moderation actions.\n\n"
-    "• *What it logs:* in groups, message text is kept for 7 days so /summary and /catchup can work, then deleted automatically. Your rank counts the days you chat — commands don't count.\n\n"
-    "• *What the AI sees:* only when someone uses an AI feature (/ask, /summary, mentions, DM summaries). Then the AI service (Groq) receives the message text and usernames needed for that one answer. Simple commands (/price, /proposals, …) send nothing anywhere.\n\n"
-    "• *Your group's controls:* group admins run this group — including AI on/off (/aioff, /aion), alert settings, and notification choices. Usage stats are owner-only.\n\n"
-    "• *The limits:* ranks allow 2 (starting), 4, or 6 AI questions a day depending on time in the community, moderators can AI-ban an abusive account from AI features only (simple commands keep working), and a hard daily token budget (200,000/day) means the AI quota can't be drained by spam — the worst case is AI pausing until midnight UTC.\n\n"
+    "• *What it logs:* in groups, message text is kept for 7 days (it powers the anti-spam checks and usage counts), then deleted automatically. Your rank counts the days you chat — commands don't count.\n\n"
+    "• *No AI:* this bot has no AI features — AI was removed on 2026-11-13. Nothing you write is ever sent to an AI service. /ask answers come from a built-in list of verified Garuda facts, and every other answer is live chain data or a saved group text.\n\n"
+    "• *Your group's controls:* group admins run this group — alert settings and notification choices included. Usage stats are owner-only.\n\n"
     "• *Group protection (opt-in):* in groups whose admins registered with /protect and the owner approved, new joiners pass a short safety check before they can post, accounts on the network's global scam-ban list are removed on sight, and a member whose first message contains a link is removed. Moderators can also mute members, keep a word blacklist, trigger anti-raid lockdowns during join surges, and switch on timed safety reminders. Protected-group admins, owner-appointed elevated users, and the owner control the ban list — with rails on that power: every global ban is written to a permanent moderation log, the owner is alerted instantly with a one-tap undo, non-owner moderators are limited to 5 global bans a day, and only the owner can global-ban an elevated user or another protected group's admin. Automatic anti-spam also mutes message flooding, flags the same long message posted across protected groups, and starts brand-new-looking accounts text-only for 24 hours; banned users can appeal to the owner once a day with /appeal.\n\n"
     "• *Don't take our word for it:* the bot's code is public — read exactly what it does: github.com/lunc-projects/garuda-assistant-bot")
 
 async def on_privacy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(PRIVACY_TEXT, parse_mode=ParseMode.MARKDOWN)
-
-async def _ai_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE, on: bool):
-    chat = update.effective_chat
-    if chat.type == "private":
-        await update.message.reply_text("This switch is for groups — in DM, your AI access follows your rank and the daily limits."); return
-    if not await _can_change(update, ctx):
-        await update.message.reply_text("Only group admins can change this group's AI setting."); return
-    store.set_ai_enabled(chat.id, on)
-    await update.message.reply_text(
-        "🤖 AI is ON for this group (rank gates and daily limits still apply)." if on
-        else "🔒 AI is OFF for this group — no AI calls will be made here. Simple commands still work. An admin can turn it back on with /aion.")
-
-async def on_aion(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await _ai_toggle(update, ctx, True)
-
-async def on_aioff(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await _ai_toggle(update, ctx, False)
 
 # --- Group protection (Phase 1 moderation, 2026-10-25) ---
 # Opt-in, owner-approved scam protection for Garuda community groups,
@@ -1679,13 +1564,11 @@ async def on_menu_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 def _panel_text(chat):
     return (f"⚙️ Admin panel — {chat.title or 'this group'}\n"
             f"🛡 Protection: {'ON' if store.mod_is_protected(chat.id) else 'OFF'}\n"
-            f"🤖 AI answers: {'ON' if store.ai_enabled(chat.id) else 'OFF'}\n"
             f"⚠️ Scam reminders: {'ON' if store.scam_alerts_enabled(chat.id) else 'OFF'}\n\n"
             "Tap a switch to flip it.")
 
 def _panel_kb(chat):
     rows = [
-        [InlineKeyboardButton("🤖 AI answers: ON ✅" if store.ai_enabled(chat.id) else "🤖 AI answers: OFF", callback_data="panel:ai")],
         [InlineKeyboardButton("⚠️ Scam reminders: ON ✅" if store.scam_alerts_enabled(chat.id) else "⚠️ Scam reminders: OFF", callback_data="panel:scam")],
     ]
     if store.mod_is_protected(chat.id):
@@ -1708,10 +1591,7 @@ async def on_panel_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not (_is_owner(q.from_user.id) or await _is_group_admin(ctx, chat.id, q.from_user.id)):
         await q.answer("Only group admins can use the panel.", show_alert=True); return
     action = q.data.split(":")[1]
-    if action == "ai":
-        store.set_ai_enabled(chat.id, not store.ai_enabled(chat.id))
-        await q.answer("AI answers " + ("ON" if store.ai_enabled(chat.id) else "OFF"))
-    elif action == "scam":
+    if action == "scam":
         if not store.mod_is_protected(chat.id):
             await q.answer("Protection isn't on for this group yet — scam reminders come with it.", show_alert=True); return
         store.set_scam_alerts(chat.id, not store.scam_alerts_enabled(chat.id))
@@ -1770,11 +1650,9 @@ async def on_learn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /learn <word> — try: " + ", ".join(GLOSSARY.keys())); return
     w = " ".join(ctx.args).lower()
     if w in GLOSSARY: await update.message.reply_text(f"📖 *{w}*: {GLOSSARY[w]}", parse_mode=ParseMode.MARKDOWN); return
-    if not await ai_guard(update): return
-    out = await ai_client.chat([{"role":"system","content":"Explain the crypto / DeFi term in 2-3 plain lines for a beginner. No financial advice."},{"role":"user","content":w}], lang=user_lang(update))
-    if not out:
-        out = ai_client.DAILY_LIMIT_NOTE if budget.exhausted() else "I don't have that one yet — try /learn quorum"
-    await update.message.reply_text(out)
+    # Unknown word: this used to ask the AI to explain the term. AI is
+    # removed, so the glossary is all /learn has — say so plainly.
+    await update.message.reply_text("I don't have that one yet — try /learn quorum")
 
 # ================= GOV ALERTS (voting + proposals) =================
 def gov_keyboard(chat_id):
@@ -2060,31 +1938,20 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 TAG_COOLDOWN[(chat.id, "faq")] = int(time.time())
                 await update.message.reply_text(_fa)
                 return
-    # Mention = ask
+    # Mention = ask (knowledge base only — mentions used to go to the
+    # AI; with AI removed, a mention gets a KB answer or the off line)
     bot_name = (await ctx.bot.get_me()).username
     if bot_name and f"@{bot_name}" in text:
         q = text.replace(f"@{bot_name}", "").strip()
         if q:
-            if not await ai_guard(update): return
-            ctx.args = q.split()
-            # reuse ask logic with cleaned question: temporarily set message text path
-            out = await ai_client.chat([
-                {"role":"system","content": ASK_SYSTEM},
-                {"role":"user","content": q}], lang=user_lang(update))
-            if not out:
-                out = ai_client.DAILY_LIMIT_NOTE if budget.exhausted() else "AI isn't configured yet (no AI_API_KEY)."
-            await send_long(update, out)
+            kb_hit = find_kb_answer(q)
+            if kb_hit:
+                await update.message.reply_text(kb_hit)
+            else:
+                await update.message.reply_text(AI_OFF_LINE)
         return
-    # DM: any long text = summarize it
-    if chat.type == "private" and len(text) > 600 and not text.startswith("/"):
-        if not AI_ENABLED:
-            rows = [{"user_name": name, "text": text, "ts": int(time.time())}]
-            await send_long(update, fallback_text(rows))
-            return
-        if not await ai_guard(update): return
-        rows = [{"user_name": name, "text": text, "ts": int(time.time())}]
-        out = await ai_client.summarize(rows, kb_text=kb_as_text(), lang=user_lang(update))
-        await send_long(update, out)
+    # (DM long-text summarizing was removed with the AI features —
+    # a long DM now simply gets no reply, like any other plain DM text.)
 
 # --- Owner issue alerts (2026-10-25): anything that goes wrong in a
 # handler or background job DMs the owner, throttled (same problem at
@@ -2158,16 +2025,13 @@ async def _apply_profile_photo():
 
 async def post_init(app: Application):
     try:
-        await app.bot.set_my_description("Garuda Assistant Bot — I summarize busy group chats into a quick TL;DR and answer Garuda DeFi questions with live on-chain data (/dex, /staking, /farms). Use /summary, /catchup, /ask in a group, or DM me a long text to summarize.")
-        await app.bot.set_my_short_description("Group summaries + Garuda DeFi assistant: live DEX, staking and farms data.")
+        await app.bot.set_my_description("Garuda Assistant Bot — live Garuda DeFi data (/dex, /staking, /farms), chain lookups, a verified-facts knowledge base (/ask), Wallet Security watches, and group protection for Garuda communities. No AI features.")
+        await app.bot.set_my_short_description("Garuda DeFi assistant: live DEX, staking and farms data. Group protection included — no AI features.")
         await app.bot.set_my_commands([
-            ("summary","Summarize group messages"),("catchup","What you missed"),("tldr","Shrink a message (reply to it)"),
-            ("ask","Ask me anything"),("dex","Garuda DEX overview (live)"),("staking","Garuda staking status (live)"),("farms","Garuda farms overview (live)"),("proposals","Proposals voting now"),("proposal","Proposal + tally"),("price","LUNC + USTC price"),("stats","Chain stats"),("govalerts","Proposal alerts on/off"),("wallet","Public wallet lookup"),("token","CW20 token info"),("security","Wallet Security — watch your own wallet"),("watch","Watch your own wallet (DM me)"),("watching","Your watched wallets"),("rank","Your rank in this chat"),("language","Choose your language"),("privacy","Privacy & security info"),("protect","Request scam protection (group admins)"),("aiban","AI-ban a user (moderators)"),("appeal","Appeal a ban (in DM)"),("rules","This group's rules"),("menu","Buttons menu — no typing"),("panel","Admin panel (group admins)"),("help","All commands")])
+            ("ask","Garuda knowledge base answer"),("dex","Garuda DEX overview (live)"),("staking","Garuda staking status (live)"),("farms","Garuda farms overview (live)"),("proposals","Proposals voting now"),("proposal","Proposal + tally"),("price","LUNC + USTC price"),("stats","Chain stats"),("govalerts","Proposal alerts on/off"),("wallet","Public wallet lookup"),("token","CW20 token info"),("security","Wallet Security — watch your own wallet"),("watch","Watch your own wallet (DM me)"),("watching","Your watched wallets"),("rank","Your rank in this chat"),("language","Choose your language"),("privacy","Privacy & security info"),("protect","Request scam protection (group admins)"),("aiban","AI-ban a user (moderators)"),("appeal","Appeal a ban (in DM)"),("rules","This group's rules"),("menu","Buttons menu — no typing"),("panel","Admin panel (group admins)"),("help","All commands")])
         # Profile photo (owner's logo) — re-applied on boot so redeploys never lose it
         await _apply_profile_photo()
         print("Garuda Assistant Bot: description + commands set")
-        if AI_ENABLED and not getattr(ai_client, "AI_API_KEY", ""):
-            await _alert_owner(app.bot, "startup check", RuntimeError("AI is ON but AI_API_KEY is not set in Railway — AI features will answer 'not configured' until the key is added."))
     except Exception as e:
         print(f"post_init: {e}")
 
@@ -2206,8 +2070,6 @@ def main():
     app.add_handler(CommandHandler("govalerts", on_govalerts))
     app.add_handler(CommandHandler("settings", on_settings))
     app.add_handler(CommandHandler("privacy", on_privacy))
-    app.add_handler(CommandHandler("aion", on_aion))
-    app.add_handler(CommandHandler("aioff", on_aioff))
     app.add_handler(CommandHandler("protect", on_protect))
     app.add_handler(CommandHandler("unprotect", on_unprotect))
     app.add_handler(CommandHandler("approve", on_approve))
